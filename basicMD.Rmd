@@ -1,0 +1,294 @@
+---
+title: "Machine Learning 1"
+subtitle: "Assignment 1 - CEU 2018"
+author: "Cagdas Yetkin, Business Analytics Part Time"
+date: '2018-01-28'
+output:
+  html_notebook:
+    df_print: paged
+  html_document:
+    df_print: paged
+---
+
+## Packages
+```{r, messages=FALSE}
+library(caret)
+library(data.table)
+library(purrr)
+library(GGally)
+library(dplyr)
+library(descr)
+library(imputeR)
+library(tidyr)
+```
+<h1>1. Model selection with a validation set</h1>
+
+Take the real estate dataset used in class and make log_price your target variable
+
+```{r, messages=FALSE}
+data <- fread("kc_house_data.csv")
+
+data[, `:=`(floors = as.numeric(floors), zipcode = factor(zipcode))]
+data[, log_price := log(price)]
+
+data[, c("id", "date", "sqft_living15", "sqft_lot15", "price") := NULL]
+
+set.seed(1234)
+```
+cut your data into three parts: 50% should be your training data, 25% each your validation and test sets (cut data into two parts, then further cut one part into two)
+```{r messages=FALSE}
+my_ratio <- 0.5
+train_indices <- createDataPartition(y = data[["log_price"]],
+                                     times = 1,
+                                     p = my_ratio,
+                                     list = FALSE)
+
+data_train     <- data[train_indices, ]
+data_remaining <- data[-train_indices, ]
+
+val_test_indices <- createDataPartition(y = data_remaining[["log_price"]],
+                                     times = 1,
+                                     p = my_ratio,
+                                     list = FALSE)
+
+data_validation <- data_remaining[val_test_indices, ]
+data_test       <- data_remaining[-val_test_indices, ]
+
+
+```
+
+
+Train three models on the training data via caret, without cross validation (method = "none"):
+<li>a linear model lm with only using sqft_living as a predictor (a simple benchmark)
+<li>a linear model lm using all available features
+<li>a regression tree (rpart) with cp = 0.0001 (the tune grid should be a dataframe with one column cp and one row with value 0.0001)
+
+For lm models, the tuneGrid argument should not be specified.
+
+```{r messages=FALSE}
+train_control <- trainControl(method = "none")
+simple_linear_fit <- train(log_price ~ sqft_living, 
+                  data = data_train, 
+                  method = "lm",
+                  trControl = train_control)
+
+linear_fit <- train(log_price ~ ., 
+                  data = data_train, 
+                  method = "lm",
+                  trControl = train_control)
+
+tune_grid <- data.frame("cp" = c(0.0001))
+rpart_fit <- train(log_price ~ ., 
+                   data = data_train, 
+                   method = "rpart", 
+                   trControl = train_control,
+                   tuneGrid = tune_grid)  
+```
+Compare your models on the validation set and choose the one with the best performance (using RMSE). Use predict.train for prediction just like we used predict in class.
+
+```{r messages=FALSE}
+RMSE <- function(x, true_x) sqrt(mean((x - true_x)^2))
+
+
+simple_linear_rmse <- RMSE(predict.train(simple_linear_fit, newdata = data_validation, type = 'raw'), data_validation$log_price)
+
+simple_linear_rmse
+linear_rmse <- RMSE(predict.train(linear_fit, newdata = data_validation, type = 'raw'), data_validation$log_price)
+linear_rmse
+
+rpart_rmse <- RMSE(predict.train(rpart_fit, newdata = data_validation, type = 'raw'), data_validation$log_price)
+rpart_rmse
+
+```
+
+Evaluate the final model on the test set. Why is it important to have this final set of observations set aside for evaluation?  (Hint: think about what we used the validation set for.)
+
+```{r messages=FALSE}
+final_performance_measure <- RMSE(predict.train(linear_fit, newdata = data_test, type = 'raw'), data_test$log_price)
+final_performance_measure
+```
+
+
+<h1>2. Predicting developer salaries</h1>
+Take the real estate dataset used in class and make log_price your target variable.
+
+```{r messages=FALSE}
+data <- fread("survey_results_public_selected.csv")
+
+data <- data[!is.na(Salary) & Salary > 0]
+data <- data[complete.cases(data)]
+data <- data[, Gender := ifelse(Gender == "Male", "Male",
+                              ifelse(Gender == "Female", "Female", "Other"))]
+large_countries <- data[, .N, by = "Country"][N > 60][["Country"]]
+data <- data[, Country := ifelse(Country %in% large_countries, Country, "Other")]
+```
+
+<ol style = "list-style-type: lower-alpha">
+<li>Describe what the data cleansing steps mean: 1) Keep the observations where the Salary is not NA and greater than zero. 2) Apply complete_cases on top of it to have only the cases without missing values. However, we will need to  fix the missing values in Gender column separetely. 3) Update the gender column to write 'Other' for the observations where there is no gender recorded. Actually it was empty string. 4) Create a vector for the large countries which have more than 60 observations in data 5) Update the country column in data by using this vector to have country name if it is a large country, call it 'Other' if not.</li>
+
+<li>Using graphs, find at least two interesting features that can contribute to understanding developer salaries</li>
+
+Look at the outcome variable, Salary.
+```{r}
+ggplot(data, aes(Salary)) + geom_density()
+```
+
+We might want to see the log Salary since we see a right skewed output.
+
+```{r}
+data[, log_salary := log(Salary)]
+
+ggplot(data, aes(log_salary)) + geom_density()
+```
+In fact we don't see a nice log-normal but it will not stop us from trying out some models with log Salaries.
+
+```{r}
+names(data)
+```
+```{r}
+data[, .N, by = TabsSpaces][order(N, decreasing = T)]
+```
+
+```{r}
+data[, .N, by = YearsProgram][order(N, decreasing = T)]
+```
+
+```{r}
+data[, .N, by = Country][order(N, decreasing = T)]
+```
+```{r}
+data[, .N, by = Gender][order(N, decreasing = T)]
+```
+```{r}
+data[, .N, by = FormalEducation][order(N, decreasing = T)]
+```
+
+```{r}
+data[, .N, by = ProgramHobby][order(N, decreasing = T)]
+```
+```{r}
+data[, .N, by = CompanySize][order(N, decreasing = T)]
+```
+I have 11 observations missing for Company Size and YearsProgram. 
+
+I have also 464 missing for TabsSpaces. Are they missing at random is the question. It looks like they are similar to the distributions of the entire data. 
+
+The people who didn't give TabSpace information also didn't give their Gender information. Looks like these people don't want to share much info about themselves. I don't think all of them are gay.
+
+```{r}
+NoInfoTabSpaces <- data[TabsSpaces == '']
+ggplot(NoInfoTabSpaces, aes(log_salary)) + geom_density()
+NoInfoTabSpaces[, .N, by = Country][order(N, decreasing = T)]
+NoInfoTabSpaces[, .N, by = Gender]
+NoInfoTabSpaces[, .N, by = YearsProgram][order(N, decreasing = T)]
+```
+
+```{r}
+NoInfoCompYears <- data[CompanySize == '' | YearsProgram == '']
+ggplot(NoInfoCompYears, aes(Salary)) + geom_density()
+```
+
+We can later change those 464 missing TabSpace information to the frequent one in their YearsProgram and Country.
+
+
+```{r}
+data <- data[TabsSpaces=='', TabsSpaces := ifelse(YearsProgram == "20 or more years", "Spaces",
+                              ifelse(Gender == "Female", "Female", "Other"))]
+```
+
+```{r}
+ggplot(data[Country== 'India'], aes(Country, ..count..)) + geom_bar(aes(fill = TabsSpaces), position = "dodge")
+```
+
+<li>Create a training and a test set assigning 70% to the training set and 30% as the test set.</li>
+
+```{r}
+set.seed(123)
+my_ratio <- 0.7
+train_indices <- createDataPartition(y = data[["log_salary"]],
+                                     times = 1,
+                                     p = my_ratio,
+                                     list = FALSE)
+
+data_train <- data[train_indices, ]
+data_train <- data_train[, Salary := NULL]
+data_test  <- data[-train_indices, ]
+
+```
+<li>Using caret train at least two predictive models to predict the logarithm of Salary (they can be of the same family but with different hyperparameters or they can be of different families like we used lm and rpart in the first exercise). Make sure NOT to include Salary as a predictor variable. Also, just before calling train, remember to use set.seed</li>
+
+```{r}
+set.seed(123)
+train_control <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+
+linear_fit <- train(log_salary ~ ., 
+                  data = data_train, 
+                  method = "lm",
+                  trControl = train_control)
+
+tune_grid <- data.frame("cp" = c(0.0001))
+rpart_fit <- train(log_salary ~ ., 
+                   data = data_train, 
+                   method = "rpart", 
+                   preProcess=c("medianImpute", "center", "scale"),
+                   trControl = train_control,
+                   tuneGrid = tune_grid) 
+linear_fit
+rpart_fit
+```
+
+<li>evaluate its performance on the test set</li>
+
+```{r}
+postResample(data_test$log_salary, predict(linear_fit, data_test))
+```
+
+<li>Compare the true and predicted values of the test set on a graph. How do you evaluate the model fit based on this graph?</li>
+
+</ol>
+
+
+<h1>3. Leave-one-out cross validation</h1>
+
+<ol style = "list-style-type: lower-alpha">
+
+<li>
+This can be a very expensive computation for large dataset and this is a disadvantage
+</li>
+
+<li>
+Basically all the observations have labelled target values and we are maximizing our validation. This is the maximum number of tests we can.
+</li>
+
+```{r}
+library(titanic)
+library(data.table)
+
+data_train <- data.table(titanic_train)
+# recode Survived to factor - needed for binary prediction
+data_train[, Survived := factor(ifelse(Survived == 1, "survived", "died"))]
+data_train[, Sex := factor(Sex)]
+data_train[, .N, by = Survived]
+sapply(data_train, function(x) {sum(is.na(x))})
+```
+```{r}
+glimpse(data_train)
+summary(data_train)
+
+set.seed(123)
+trctrl <- trainControl(method = "loocv", 
+                       classProbs = TRUE)
+
+loocv_model <- train(Survived ~ Pclass + Sex + Fare + SibSp, 
+                 data = data_train, 
+                 method = "glm",
+                 trControl=trctrl,
+                 preProcess=c("knnImpute", "center", "scale"),
+                 tuneLength=5)
+
+loocv_model
+```
+
+
+
+</ol>
