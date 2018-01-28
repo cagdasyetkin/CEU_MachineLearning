@@ -283,7 +283,7 @@ summary(resamps)
 ```
 
 Glmnet Model RMSE is a bit better than Tree based on their RMSE and Rsquared results.
-I picked an alpha value of 1, which means LASSO the winner.
+I picked an alpha value of 1, which means LASSO and it is the winner.
 
 <li>evaluate its performance on the test set</li>
 
