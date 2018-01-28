@@ -11,7 +11,8 @@ output:
 ---
 
 ## Packages
-```{r, messages=FALSE}
+```{r, message=FALSE}
+library(doParallel)
 library(caret)
 library(data.table)
 library(purrr)
@@ -20,6 +21,9 @@ library(dplyr)
 library(descr)
 library(imputeR)
 library(tidyr)
+
+registerDoParallel(cores = 4)
+theme_set(theme_bw())
 ```
 <h1>1. Model selection with a validation set</h1>
 
@@ -124,16 +128,16 @@ data <- data[, Country := ifelse(Country %in% large_countries, Country, "Other")
 ```
 
 <ol style = "list-style-type: lower-alpha">
-<li>Describe what the data cleansing steps mean: 1) Keep the observations where the Salary is not NA and greater than zero. 2) Apply complete_cases on top of it to have only the cases without missing values. However, we will need to  fix the missing values in Gender column separetely. 3) Update the gender column to write 'Other' for the observations where there is no gender recorded. Actually it was empty string. 4) Create a vector for the large countries which have more than 60 observations in data 5) Update the country column in data by using this vector to have country name if it is a large country, call it 'Other' if not.</li>
+<li>Describe what the data cleansing steps mean: 1) Keep the observations where the Salary is not NA and greater than zero. 2) Apply complete_cases on top of it to have only the cases without missing values. However, we will need to  fix the missing values in Gender column separetely. They are empty strings. 3) Update the gender column to write 'Other' for the observations where there is no gender recorded. Actually it was empty string again. 4) Create a vector for the large countries which have more than 60 observations in data 5) Update the country column in data by using this vector to have country name if it is a large country, call it 'Other' if not.</li>
 
 <li>Using graphs, find at least two interesting features that can contribute to understanding developer salaries</li>
 
-Look at the outcome variable, Salary.
+Look at the outcome variable, Salary first...
 ```{r}
 ggplot(data, aes(Salary)) + geom_density()
 ```
 
-We might want to see the log Salary since we see a right skewed output.
+We might want to see the log Salary since we see a right skewed output. Bimodal shape is also creeping into my brain. I will try to discover what is causing this bimodal shape...
 
 ```{r}
 data[, log_salary := log(Salary)]
@@ -142,20 +146,47 @@ ggplot(data, aes(log_salary)) + geom_density()
 ```
 In fact we don't see a nice log-normal but it will not stop us from trying out some models with log Salaries.
 
+What are my variables?
 ```{r}
 names(data)
 ```
 ```{r}
 data[, .N, by = TabsSpaces][order(N, decreasing = T)]
 ```
+```{r}
+ggplot(data, aes(Salary)) + 
+    geom_histogram(fill = "tan3", color= "tan4") + 
+    facet_wrap(~TabsSpaces) + scale_x_continuous(breaks = 50000)
+```
+Spacing and Tabbing are referring to different programming languages. These are essentially the differences between low and high level languages. Such as Python (Tab) and C++ (Space). 
+
 
 ```{r}
 data[, .N, by = YearsProgram][order(N, decreasing = T)]
 ```
+```{r}
+ggplot(data, aes(Salary)) + 
+    geom_histogram(fill = "tan3", color= "tan4") + 
+    facet_wrap(~YearsProgram) + scale_x_continuous(breaks = 50000)
+```
+Here we can see the effect of being an experienced developer! The inexperienced developers are pulling the salaries to the left significantly.
+
 
 ```{r}
 data[, .N, by = Country][order(N, decreasing = T)]
 ```
+
+```{r messages=FALSE}
+#data[, salary_avg := mean(Salary), by = Country]
+
+ggplot(data, aes(Salary)) + 
+    geom_histogram(fill = "tan3", color= "tan4") + 
+    facet_wrap(~Country) + scale_x_continuous(breaks = 50000)
+
+```
+A quick look reveals that Salaries in India and Others (small countries) have effect on that bimodal shape in the Salary density plot. Country really matters!
+
+
 ```{r}
 data[, .N, by = Gender][order(N, decreasing = T)]
 ```
@@ -164,8 +195,23 @@ data[, .N, by = FormalEducation][order(N, decreasing = T)]
 ```
 
 ```{r}
+ggplot(data, aes(Salary)) + 
+    geom_histogram(fill = "tan3", color= "tan4") + 
+    facet_wrap(~FormalEducation)
+```
+
+
+```{r}
 data[, .N, by = ProgramHobby][order(N, decreasing = T)]
 ```
+
+```{r}
+ggplot(data, aes(Salary)) + 
+    geom_histogram(fill = "tan3", color= "tan4") + 
+    facet_wrap(~ProgramHobby) + scale_x_continuous(breaks = 50000)
+```
+
+
 ```{r}
 data[, .N, by = CompanySize][order(N, decreasing = T)]
 ```
@@ -173,7 +219,7 @@ I have 11 observations missing for Company Size and YearsProgram.
 
 I have also 464 missing for TabsSpaces. Are they missing at random is the question. It looks like they are similar to the distributions of the entire data. 
 
-The people who didn't give TabSpace information also didn't give their Gender information. Looks like these people don't want to share much info about themselves. I don't think all of them are gay.
+The people who didn't give TabSpace information also didn't give their Gender information. Looks like these people don't want to share much info about themselves. 
 
 ```{r}
 NoInfoTabSpaces <- data[TabsSpaces == '']
@@ -181,23 +227,6 @@ ggplot(NoInfoTabSpaces, aes(log_salary)) + geom_density()
 NoInfoTabSpaces[, .N, by = Country][order(N, decreasing = T)]
 NoInfoTabSpaces[, .N, by = Gender]
 NoInfoTabSpaces[, .N, by = YearsProgram][order(N, decreasing = T)]
-```
-
-```{r}
-NoInfoCompYears <- data[CompanySize == '' | YearsProgram == '']
-ggplot(NoInfoCompYears, aes(Salary)) + geom_density()
-```
-
-We can later change those 464 missing TabSpace information to the frequent one in their YearsProgram and Country.
-
-
-```{r}
-data <- data[TabsSpaces=='', TabsSpaces := ifelse(YearsProgram == "20 or more years", "Spaces",
-                              ifelse(Gender == "Female", "Female", "Other"))]
-```
-
-```{r}
-ggplot(data[Country== 'India'], aes(Country, ..count..)) + geom_bar(aes(fill = TabsSpaces), position = "dodge")
 ```
 
 <li>Create a training and a test set assigning 70% to the training set and 30% as the test set.</li>
@@ -211,7 +240,7 @@ train_indices <- createDataPartition(y = data[["log_salary"]],
                                      list = FALSE)
 
 data_train <- data[train_indices, ]
-data_train <- data_train[, Salary := NULL]
+#data_train <- data_train[, Salary := NULL]
 data_test  <- data[-train_indices, ]
 
 ```
@@ -219,31 +248,57 @@ data_test  <- data[-train_indices, ]
 
 ```{r}
 set.seed(123)
-train_control <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+train_control <- trainControl(method = "cv", number = 10)
 
-linear_fit <- train(log_salary ~ ., 
-                  data = data_train, 
-                  method = "lm",
-                  trControl = train_control)
+glm_tune_grid <- expand.grid("alpha" = 1,
+                             "lambda" = c(0.1, 0.01, 0.001, 0.0001))
 
-tune_grid <- data.frame("cp" = c(0.0001))
-rpart_fit <- train(log_salary ~ ., 
+
+lasso_fit <- train(log_salary ~ . -Salary, 
+                   data = data_train, 
+                   method = "glmnet", 
+                   preProcess = c("knnImpute", "center", "scale"),
+                   tuneGrid = glm_tune_grid,
+                   trControl = train_control)
+
+rpart_tune_grid <- data.frame("cp" = c(0.01, 0.001, 0.0001, 0.00001))
+rpart_fit <- train(log_salary ~ . -Salary, 
                    data = data_train, 
                    method = "rpart", 
-                   preProcess=c("medianImpute", "center", "scale"),
+                   preProcess=c("knnImpute", "center", "scale"),
                    trControl = train_control,
-                   tuneGrid = tune_grid) 
-linear_fit
+                   tuneGrid = rpart_tune_grid) 
+lasso_fit
 rpart_fit
 ```
+
+### Model selection via cross validation
+
+```{r}
+resamps <- resamples(list("regression tree" = rpart_fit,
+                          "lasso" = lasso_fit))
+summary(resamps)
+```
+
+Glmnet Model RMSE is a bit better than Treem based on their RMSE and Rsquared results.
+I picked an alpha value of 1, which means LASSO!
 
 <li>evaluate its performance on the test set</li>
 
 ```{r}
 postResample(data_test$log_salary, predict(linear_fit, data_test))
+
+test_prediction <- predict.train(lasso_fit, newdata = data_test)
+RMSE(test_prediction, data_test[["log_salary"]])
 ```
 
 <li>Compare the true and predicted values of the test set on a graph. How do you evaluate the model fit based on this graph?</li>
+
+```{r}
+data_test[, pred := test_prediction]
+ggplot(data_test, aes(log_salary, pred)) + geom_point()
+```
+
 
 </ol>
 
@@ -257,38 +312,72 @@ This can be a very expensive computation for large dataset and this is a disadva
 </li>
 
 <li>
-Basically all the observations have labelled target values and we are maximizing our validation. This is the maximum number of tests we can.
+We are maximizing our validation. This is the maximum number of validations we can do with the data on hand. It also mimics the real life scenario where we will apply our model.
 </li>
 
-```{r}
+```{r message=FALSE}
 library(titanic)
 library(data.table)
+library(dplyr)
+library(caret)
 
 data_train <- data.table(titanic_train)
 # recode Survived to factor - needed for binary prediction
 data_train[, Survived := factor(ifelse(Survived == 1, "survived", "died"))]
-data_train[, Sex := factor(Sex)]
-data_train[, .N, by = Survived]
-sapply(data_train, function(x) {sum(is.na(x))})
-```
-```{r}
-glimpse(data_train)
+data_train[, Sex := factor(Sex)] #Convert sex to factor
+sapply(data_train, function(x) {sum(is.na(x))}) #check for NAs
+
+#do some simple imputation for Age
+data_train[, Age := ifelse(is.na(Age), median(Age, na.rm = T), Age), by = Fare]
+data_train[, Age := ifelse(is.na(Age), median(Age, na.rm = T), Age)]
+#have a look at your data
+str(data_train)
 summary(data_train)
+glimpse(data_train)
+```
 
+```{r message=FALSE}
 set.seed(123)
-trctrl <- trainControl(method = "loocv", 
-                       classProbs = TRUE)
+trctrl_1 <- trainControl(method = "loocv")
+                       #summaryFunction = twoClassSummary,
+                       #classProbs = TRUE
+                       #verboseIter = FALSE) #A logical for printing a training log
 
-loocv_model <- train(Survived ~ Pclass + Sex + Fare + SibSp, 
+loocv_model <- train(Survived ~ Fare + Sex, 
                  data = data_train, 
                  method = "glm",
-                 trControl=trctrl,
-                 preProcess=c("knnImpute", "center", "scale"),
-                 tuneLength=5)
+                 trControl=trctrl_1)
+                 #preProcess=c("center", "scale"))
+                 #tuneLength=5)
 
 loocv_model
+#loocv_model[['results']][['Accuracy']]
+```
+and a 10-fold cross-validation estimation using only Fare and Sex as predictor features
+```{r message=FALSE}
+set.seed(123)
+trctrl_2 <- trainControl(method = "cv", 
+                       number = 10)
+                       #classProbs = TRUE)
+
+cv10_model <- train(Survived ~ Fare + Sex, 
+                 data = data_train, 
+                 method = "glm",
+                 trControl=trctrl_2)
+                 #preProcess=c("center", "scale"))
+                 #tuneLength=5)
+
+cv10_model
 ```
 
+```{r}
+summary(cv10_model$resample)
+```
 
+```{r}
+summary(loocv_model$resample)
+```
+
+In sample accuracy is a bit better for LOOCV (78.23% to 78.12%). Doing so many validations can give some boosting effect to our model. However, the threshold between computation time and the business objectives should be carefully assessed.
 
 </ol>
