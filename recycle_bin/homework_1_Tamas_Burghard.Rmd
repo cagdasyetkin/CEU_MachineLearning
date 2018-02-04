@@ -1,0 +1,330 @@
+---
+title: "Homework 1"
+author: "Tamas Burghard (138982)"
+date: '28 jan 2018 '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Model selection with a validation set (5 points)
+
+
+
+```{r problem_1_given}
+rm(list=ls())
+library(data.table)
+library(caret)
+library(knitr)
+library(ggplot2)
+
+data <- fread("data/king_county_house_prices/kc_house_data.csv")
+
+data[, `:=`(floors = as.numeric(floors), zipcode = factor(zipcode))]
+data[, log_price := log(price)]
+
+data[, c("id", "date", "sqft_living15", "sqft_lot15", "price") := NULL]
+
+set.seed(1234)
+```
+The dataset after the given conversations consist of `r nrow(data)` observations of `r ncol(data)` variables. (The numbers are dynamically generated, not hardcoded into the document)
+
+### 1/A: cut the data into 3 parts
+```{r problem_1_answer_A}
+train_indices <- createDataPartition(y = data[["log_price"]],
+                                     times = 1,
+                                     p = 0.5,
+                                     list = FALSE)
+data_train <- data[train_indices, ]
+data_test_validation <- data[-train_indices, ]
+
+validation_indices <- createDataPartition(y = data_test_validation[["log_price"]],
+                                     times = 1,
+                                     p = 0.5,
+                                     list = FALSE)
+data_validation <- data_test_validation[validation_indices, ]
+data_test <- data_test_validation[-validation_indices, ]
+```
+
+Having done the data separation, three datasets were generated:
+
+* Training data: the **data_train** table with `r nrow(data_train)` observations
+* Validation data: the **data_validation** table with `r nrow(data_validation)` observations
+* Test data: the **data_test** table with `r nrow(data_test)` observations
+
+### 1/B: train three models without CV
+```{r problem_1_answer_B}
+train_control <- trainControl(method = "none")
+
+simple_linear_fit <- train(form = log_price ~ sqft_living, 
+                           method = "lm",
+                           data = data_train,
+                           trControl = train_control)
+
+linear_fit <- train(form = log_price ~ . , 
+                           method = "lm",
+                           data = data_train,
+                           trControl = train_control)
+
+tunegrid <- data.frame("cp" = c(0.0001))
+rpart_fit <- train(form = log_price ~ . , 
+                   method = "rpart",
+                   data = data_train,
+                   trControl = train_control,
+                   tuneGrid = tunegrid)
+```
+
+We have created the three models. As we did not use cross-validation or other random method, and fitting a linear model is also non-random, we did not reset the seed each time. (Otherwise it would have needed)
+
+### 1/C: compare the models and select the best using RMSE
+```{r problem_1_answer_C}
+RMSE <- function(x, true_x) sqrt(mean((x - true_x)^2))
+
+simple_linear_rmse <- RMSE(predict.train(simple_linear_fit, newdata = data_validation), data_validation[,log_price]) 
+linear_rmse <- RMSE(predict.train(linear_fit, newdata = data_validation), data_validation[,log_price]) 
+rpart_rmse <- RMSE(predict.train(rpart_fit, newdata = data_validation), data_validation[,log_price]) 
+
+#findLinearCombos(data_train)
+kable((c("Simple linear model" = simple_linear_rmse,
+                   "Linear model" = linear_rmse,
+                   "RPart model" = rpart_rmse)), 
+      caption = "Comparing the three models by RMSE",
+      col.names = "RMSE")
+```
+\newline  
+
+Regarding the RMSE values on the validation set, the *linear model* seems to be the best, but the *rpart model* is almost as good. There is a warning about **rank-deficiency** with the *linear model* - it's caused by the fact, that the **sqft_living** variable is linear combination of two other variables, and the lm function automatically removed one of the variables - hence the deficiency. In our case, this not cause a problem as we don't have any NA-s in the validation / test sets.
+
+### 1/D: evaluate the final model
+```{r problem_1_answer_D}
+final_performance_measure <- RMSE(predict.train(linear_fit, newdata = data_test), data_test[,log_price]) 
+
+kable(c("Linear model" = final_performance_measure), 
+      caption = "RMSE of the final model",
+      col.names = "RMSE")
+```
+\newline  
+
+As we can see, the performance of the *linear model* on the test set was almost the same as it was on the validation set. This fact suggests that our model performance is stable with unknown data (but we should not forget that **createDataPartition** tries to separate the data keeping the original distribution of the target variable). The purpose of the *validation set* and the *test set* is different: we use the *validation set* to compare models (and finding optimal hyperparameters), and we use the *test set* only for benchmarking the selected model with unknown data (estimating its prediction error on new data). Comparing different models on the *test set* is nonsense: the relative performance of the different models has been calculated before, and even if some model would perform better on the test set then our selected one, we could not utilize this information.  
+
+### 1/E: Comparing Cross-validation with train-validation-test sets
+
+As it was not stated, I *did not recalculated* the final model using the training + validation data together, as it would have happened automatically if we had have used cross-validation. This is a huge difference between the two methods: as the cross-validation reuse the training+validation data - the same data can be used for validation and training purposes (not the same time) - it can be a solution for cases when we don't have a large dataset.  
+
+In theory, the separated train-validation-test set is a better way as *Model selection* and *Model assessment* are different goals, and it is better to use separated data. Cross-validation is statistically biased and underestimates the test error.  
+
+Another difference is the computation time: Cross-validation (especially repeated cross-validation) is significantly slower than the separated 3 sets method.
+
+## Predicting developer salaries (5 points)
+
+```{r problem_2_given_code}
+data <- fread("data/stackoverflow2017/survey_results_public_selected.csv")
+
+data <- data[!is.na(Salary) & Salary > 0]
+data <- data[complete.cases(data)]
+data <- data[, Gender := ifelse(Gender == "Male", "Male",
+                              ifelse(Gender == "Female", "Female", "Other"))]
+large_countries <- data[, .N, by = "Country"][N > 60][["Country"]]
+data <- data[, Country := ifelse(Country %in% large_countries, Country, "Other")]
+```
+### 2/A: Describe what the data cleansing steps mean.
+
+The first step removes the cases where the *Salary* variable is missing or it is exactly zero.  
+
+The second step tries to keep only the cases having no NA-s - actually it is true for all our remainder cases. (empty string was not NA for fread with a string variable)  
+
+The third line recodes the *Gender* variable: it leaves the **"Male"** and **"Female"** as it was, and codes everything else to **"Other"**. This variable had some weird and empty values, and worth to recode.  
+
+The fourth line creates a list of countries with at least 60 cases. And the fifth line recodes the *Country* variable, keeping it unchanged in case of being one of the **large countries** (defined just before), and recoded every other case to **Other**.  
+
+### 2/B: Interesting features of the data
+
+
+```{r problem_2_A_1}
+ggplot(data, aes(Salary, col=factor(TabsSpaces)))+geom_density()+ggtitle("Histograms of the salary \n Categorized by using spaces or tabs")
+
+```
+\newline  
+
+The first interesting feature of the data is the following: in average who uses spaces instead of tabs (or mixed) earns more, according to the data. In the histogram, we can see the similarity of the distributions (similar to lognormal), however the one belongs to space-users is shifted to the right.
+
+
+```{r problem_2_A_2}
+ggplot(data, aes(Salary, col=factor(ProgramHobby)))+geom_density()+geom_vline(aes(xintercept=mean(Salary)), col="red")
+```
+\newline  
+
+The other interesting feature: there are more hobbist who earn less than the mean of the salary, while who earn more than 100.000 tend to do programming as a hobby AND a profession, and/or contribute to open source projects. 
+
+### 2/C: Creating 70/30 training/test sets  
+
+
+```{r problem_2_answer_C}
+set.seed(1234)
+train_indices <- createDataPartition(y = data[["Salary"]],
+                                     times = 1,
+                                     p = 0.7,
+                                     list = FALSE)
+data_train <- data[train_indices, ]
+data_test <- data[-train_indices, ]
+```
+Having done the data separation, the two generated datasets are:
+
+* Training data: the **data_train** table with `r nrow(data_train)` observations
+* Test data: the **data_test** table with `r nrow(data_test)` observations
+
+### 2/D: Fitting models 
+
+```{r problem_2_answer_D}
+train_control <- trainControl(method = "repeatedcv", 
+                            number = 10, 
+                            repeats = 3) # repeat CV 3 times
+
+#simple linear model for benchmarking                             
+set.seed(567) # reset to have the models comparable
+simple_lin_fit <- train(form = log(Salary) ~ Country, 
+                           method = "lm",
+                           data = data_train,
+                           trControl = train_control)
+
+# Rpart model
+tunegrid <- data.frame("cp" = c(0.01, 0.005, 
+                                 0.001, 0.0005,
+                                 0.0001, 0.00005,
+                                 0.00001, 0.000005))
+set.seed(567) # reset to have the models comparable
+rpart_fit <- train(form = log(Salary) ~ .-Salary , 
+                   method = "rpart",
+                   data = data_train,
+                   trControl = train_control,
+                   tuneGrid = tunegrid)
+
+#Linear model with Lasso
+glm_tune_grid <- expand.grid("alpha" = 1,
+                             "lambda" = c(0.1, 0.01, 0.001, 0.0001))
+
+set.seed(567)  # reset to have the models comparable
+lasso_fit <- train(log(Salary) ~ . -Salary, 
+                   data = data_train, 
+                   method = "glmnet", 
+                   preProcess = c("center", "scale"),
+                   tuneGrid = glm_tune_grid,
+                   trControl = train_control)
+
+
+
+```
+
+In this part, I created three different models:
+
+*  A simple linear model, based on **Country** - for benchmarking purposes
+*  An rpart model with grid search through different complexity parameters
+*  A linear model, selecting the variables by the Lasso algorithm
+
+The left-hand side variable was always *log(Salary)* - leaving the task of taking logs to the train algorithm. The reason for doing this way was that among the instructions there was no mention about taking log before, and the data separation was done by this stage. I will use the logs all the time, and evaluate the models on log-scale. The description of the task was not clear on this. 
+
+I choose a 10-fold crossvalidation repeated 3 times for estimating the models' performance on new data.
+
+
+```{r problem_2_answer_D2}
+resamps <- resamples(list("Simple linear model" = simple_lin_fit,
+                          "Rpart model" = rpart_fit,
+                          "Lasso model" = lasso_fit))
+summary(resamps)
+```
+
+As we can see, the *lasso model* was the best among the models, in every quantile it outperformed the others. (RMSE is the measure that I used)  
+
+What is interesting, that the advantage of the more sophisticated models was not so high.
+
+
+
+```{r eval_on_test}
+final_performance_measure <- RMSE(predict.train(lasso_fit, newdata = data_test), log(data_test[, Salary])) 
+
+kable(c("Lasso model" = final_performance_measure), 
+      caption = "RMSE of the final model",
+      col.names = "RMSE")
+```
+
+The test error RMSE of the Lasso model is higher than it was predicted, but this is normal with cross-validation. 
+
+
+### 2/E: Compare the true and predicted values of the test set on a graph
+
+
+```{r compare_tru_and_predicted}
+lasso_predict <- predict.train(lasso_fit, newdata = data_test)
+lasso_orig <- log(data_test[, Salary]) 
+
+#creating a data table with the TRUE, the PREDICTED values and with categories of the difference
+
+a <- data.table("Predict"=lasso_predict,"True"=lasso_orig, "Diff"=lasso_orig-lasso_predict)  # auxiliary table
+a<-a[, Diff_cat := cut(Diff, 15)]  # cut the errors to 15 categories
+kable(table(a$Diff_cat), caption="Table with the prediction error categories", col.names=c("Prediction error category", "Number of cases"))
+setkey(a, True)  # sort by True
+ggplot(a, aes(x=True, y=Predict, col=Diff_cat))+geom_point(alpha=0.3, size=.4)+ggtitle("Difference between the predicted and the actual values \n (log scale)")
+ggplot(a, aes(Diff))+geom_histogram(bins=100)+ggtitle("Histogram of prediction errors \n (log scale)")
+
+```
+
+To demonstrate the prediction errors, I have made an auxiliary table with the predicted and actual values, and the prediction errors. I created a 15 categories by the errors, and sorted the dataset by the True value. On the plot, we can see the Predict ~ True connection, colored by the differenc categories. The first observation, that the scales are not symmetric: there are some extreme low (True) values, that our model did not predicted well - these values might be wrong anyway. The rest of the plot reveals us a huge variance of the model: being on a log scale these differences questioning the usability of the model. 
+
+There is one more thing to see: on both plots we can spot a cluster that is systematically mispredicted, on the histogram it is a secondary mode.  
+
+In conclusion: the model fit is poor, although the majority of the differences are around zero, but the variance is high.
+
+## 3. Leave-one-out cross validation (3 points)
+
+### 3/a: Name a disadvantage of this method compared to using a moderate value (say, 10) for k?
+
+It is computationally intensive: the number of the fitted models is equal to k-1.
+
+### 3/b: Why do you think it can still make sense to compute this measure? In what way can this measure be closer to the “real” performance of the model?
+
+The result can be less biased: it is very similar to when the whole model was tested k-1 times, because each model is basen on k-1 observations (instead of the final model which is k)
+
+### 3/c: You can implement LOOCV with caret by setting an option in trainControl: method = "loocv". and use a simple logit model glm for prediction.
+
+```{r}
+library(titanic)
+library(data.table)
+
+data_train <- data.table(titanic_train)
+# recode Survived to factor - needed for binary prediction
+data_train[, Survived := factor(ifelse(Survived == 1, "survived", "died"))]
+```
+
+```{r}
+train_control <- trainControl(method = "loocv",
+                              classProbs = TRUE) 
+                  
+set.seed(567) # reset to have the models comparable
+loocv_fit <- train(form = Survived ~ Fare + Sex, 
+                           method = "glm",
+                           data = data_train,
+                           trControl = train_control)
+
+train_control <- trainControl(method = "cv",
+                              number = 10,
+                              classProbs = TRUE) 
+                  
+set.seed(567) # reset to have the models comparable
+cv_fit <- train(form = Survived ~ Fare + Sex, 
+                           method = "glm",
+                           data = data_train,
+                           trControl = train_control)
+
+```
+
+```{r}
+kable(summary(loocv_fit$resample))
+kable(summary(cv_fit$resample))
+```
+
+What is important to us is the mean *Accuracy*, which is 0.7835 with the normal, **10-fold cross-validation**, and 0.7823 with the **loocv** method, so the 10-fold cv seems to have performed slightly better. In reality, this means that the 10-fold CV is as good measure on this data for forecasting the external validity as the loocv method, because the two numbers are virtually equal. I think it is important to state here, that the two models (the final models) are the same, because those are based on the whole dataset, the only difference we have is the method of the prediction of the out-of-sample error. In our case both methods predicts the same external validity.  
+
+While we can see the performance difference in the case of the normal 10-fold CV with each run, for the loocv-method the result is either 0 or 1, because there is only one prediction with each run, and the model can perform 100% or 0% on that. Therefore the Accuracy vector consist of 194 0-s and 697 1-s, and in that vector every quartile 1<=n<=4 is equal to 0. 
+
