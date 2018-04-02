@@ -1,0 +1,274 @@
+---
+title: "Assignment3"
+author: "Cagdas Yetkin"
+date: "February 11, 2018"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    df_print: paged
+  pdf_document: default
+---
+
+
+```{r, include=FALSE}
+cat("\f")
+rm(list=ls())
+options(scipen=5)
+library(datasets)
+library(caret)
+library(NbClust)
+library(factoextra)
+library(skimr)
+library(corrplot)
+library(data.table)
+library(datasets)
+library(MASS)
+library(ISLR)
+library(caret)
+library(ggplot2)
+library(skimr)
+library(dplyr)
+theme_set(theme_bw())
+```
+
+## 1. PCA for supervised learning
+
+### a. Do a short exploration of data and find possible predictors of `crim` 
+
+No missing values, very clean data.
+
+```{r}
+data <- data.table(Boston)
+
+summary(data)
+
+```
+
+Explore some predictors
+
+```{r}
+glimpse(data)
+```
+
+```{r}
+M <- cor(data)
+corrplot(M, method = "circle")
+
+```
+
+Crime is strongly positive corralated with rad and tax. And a bit negatively with Black and Medv.
+Charles River is actually a boolean.
+
+### b. Create a training and a test set of 50%
+
+```{r}
+set.seed(1234)
+training_ratio <- 0.5
+train_indices <- createDataPartition(y = data[["crim"]],
+                                     times = 1,
+                                     p = training_ratio,
+                                     list = FALSE)
+data_train <- data[train_indices, ]
+data_test <- data[-train_indices, ]
+```
+
+### c. Use a linear regression to predict `crim` and use 10-fold cross validation
+
+
+```{r}
+train_control <- trainControl(method = "cv",
+                              number = 10)
+set.seed(93)
+lm_fit <- train(crim ~ .,
+                   method = "lm",
+                   data = data_train,
+                   trControl = train_control)
+
+mean(data.table(lm_fit$results["RMSE"])$RMSE)
+```
+
+### d. Try to improve the model by using PCA for dimensionality reduction
+
+**Center and scale your variables and use pcr to conduct a search for the optimal number of principal components. Does PCA improve the fit over the simple linear model?**
+
+
+PCR gave a very closed result to linear one
+
+```{r}
+tune_grid <- data.frame(ncomp = 1:13)
+
+set.seed(93)
+pcr_fit <- train(crim ~ . , 
+                data = data_train, 
+                method = "pcr", 
+                trControl = train_control,
+                tuneGrid = tune_grid,
+                preProcess = c("center", "scale"))
+pcr_fit
+
+```
+
+### e. Use penalized linear models for the same task
+
+**Make sure to include ridge (alpha = 0) to your tune grid. How does the best model compare to that found in d)? Would pre-processing via PCA help this model? (add pca to preProcess). Why do you think the answer can be expected?**
+
+
+Ridge performed better. I would prefer ridge method here.
+
+Considering that we are not dealing with a big sample size and number of variables, maybe pca isnt necessary.
+
+
+```{r}
+
+tune_grid = expand.grid(
+              .alpha=0,
+              .lambda=seq(0, 2, by = 0.01))
+
+set.seed(123)
+ridge_fit <- train(crim ~ .,
+                   method = "glmnet",
+                   data = data_train,
+                   trControl = train_control,
+                   tuneGrid = tune_grid,
+                   preProcess = c("center", "scale"))
+
+mean(data.table(ridge_fit$results["RMSE"])$RMSE)
+
+set.seed(123)
+ridge_pca_fit <- train(crim ~ .,
+                     method = "glmnet",
+                     data = data_train,
+                     trControl = train_control,
+                     tuneGrid = tune_grid,
+                     preProcess = c("center", "scale", "pca"))
+
+mean(data.table(ridge_pca_fit$results["RMSE"])$RMSE)
+
+
+
+```
+
+### f. Evaluate your preferred model on the test set
+
+Ridge is performing fairly on the test set also
+
+```{r}
+test_prediction <- predict(ridge_fit, newdata = data_test)
+RMSE(test_prediction, data_test[["crim"]])
+RMSE(test_prediction, data_test$crim)
+```
+
+
+## 2. Clustering on the `USArrests` datase [week4]
+
+```{r}
+cat("\f")
+rm(list=ls())
+data <- USArrests
+summary(data)
+```
+
+### a. Determine the optimal number of clusters
+
+`NbClust` results with an optimal number of 2 clusters!
+
+```{r, results="hide"}
+nb <- NbClust(data, method = "kmeans", 
+              min.nc = 2, max.nc = 10, index = "all")
+```
+
+### b. Use the k-means method to cluster states. Plot observations 
+
+2 clusters look good!
+```{r}
+set.seed(1234)
+km <- kmeans(data, centers = 2, nstart = 50)
+
+data_clusters <- cbind(data, data.table("cluster" = factor(km$cluster)))
+
+centers_2 <- data.table(km$centers)
+centers_2[, cluster := factor("center", levels = c(1, 2, "center"))]
+
+
+data_clusters <- rbind(data_clusters, centers_2)
+
+
+ggplot(data_clusters, aes(x = UrbanPop, y = Assault, color = cluster,
+           size = ifelse(cluster == "center", 2, 1))) + 
+            geom_point() +
+            scale_size(guide = 'none')
+
+
+```
+
+
+### c. Perform PCA and get the first two principal component coordinates for all observations
+
+
+```{r}
+pca_result <- prcomp(data, scale. = TRUE)
+
+first_two_pc <- data.table(pca_result$x[, 1:2])
+fviz_pca(pca_result)
+
+data_clusters_pca <- cbind(data_clusters, first_two_pc)
+
+ggplot(data_clusters_pca, aes(x = PC1, y = PC2, color = cluster)) + geom_point() + scale_size(guide = 'none')
+```
+
+## 3. PCA of high-dimensional data
+
+```{r}
+
+rm(list=ls())
+
+data <- fread("./gene_data.csv")
+data$is_diseased
+data[, is_diseased := factor(is_diseased)]
+dim(data)
+tail(names(data))
+```
+
+### a. Perform PCA with scaling features
+
+Amazing! 40 PC can capture the all variation. Considering the original 1000 variables, this is a significant result in dimension reduction.
+
+```{r}
+data_features <- copy(data)
+data_features[, is_diseased := NULL]
+
+pca_result <- prcomp(data_features, scale. = TRUE) 
+summary(pca_result)
+```
+
+### b. Visualize datapoints in the space of the first two principal components
+
+
+First 20 healthy and the last 20 were disesased in our data. 
+We can see this separation by 1st principal component in the plot.
+
+```{r}
+fviz_pca_ind(pca_result)
+```
+
+### c. Which individual features can matter the most in separating diseased from healthy?
+
+**Choose the two features with the largest coordinates and plot observations in the coordinate system defined by these two original features. What do you see?**
+
+
+First of all, in the plot the cluster around 500 is nicely capturing the most important individual features. (502 and 589) separating healty from sick. Their correlation score is also significant.
+
+```{r}
+pre_process <- preProcess(data_features, method = c("center", "scale", "pca"))
+plot(pre_process$rotation[1:1000,1])
+
+
+x <- pca_result$rotation[,1]
+x[order(x, decreasing = TRUE)][1:2]
+ggplot(data, aes(x = measure_502, y = measure_589, color = is_diseased)) + geom_point()
+
+#go ahead for the correlation
+cor(data_features$measure_502, data_features$measure_589)
+```
+
